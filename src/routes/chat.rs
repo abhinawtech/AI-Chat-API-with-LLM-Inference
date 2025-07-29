@@ -1,48 +1,98 @@
 // src/routes/chat.rs
-use axum::{extract::State, Json};
+use axum::{extract::State, Json, http::StatusCode};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use crate::models::chat::ChatModel;
+use std::{sync::Arc, time::Duration};
+use crate::services::model_service::ModelService;
 
 #[derive(Deserialize)]
 pub struct ChatRequest {
     pub message: String,
+    #[serde(default = "default_max_tokens")]
+    pub max_tokens: usize,
 }
+
+fn default_max_tokens() -> usize { 20 }
 
 #[derive(Serialize)]
 pub struct ChatResponse {
     pub reply: String,
+    pub tokens_generated: usize,
+    pub generation_time_ms: u128,
+    pub tokens_per_second: f64,
+    pub cached: bool,
 }
 
 pub async fn chat_handler(
-    State(model): State<Arc<ChatModel>>,
-    Json(req):   Json<ChatRequest>,
-) -> Json<ChatResponse> {
-    // 1) Tokenize input
-    let input_ids = model
-        .tokenizer
-        .encode(req.message.clone(), true)
-        .unwrap()
-        .get_ids()
-        .to_vec();
+    State(model_service): State<Arc<ModelService>>,
+    Json(req): Json<ChatRequest>,
+) -> Result<Json<ChatResponse>, (StatusCode, String)> {
+    println!("🔵 Chat handler started with message: '{}'", req.message);
+    
+    // Validate input
+    if req.message.trim().is_empty() {
+        println!("❌ Empty message rejected");
+        return Err((StatusCode::BAD_REQUEST, "Message cannot be empty".to_string()));
+    }
+    
+    if req.max_tokens > 15 {
+        println!("❌ Too many tokens requested: {}", req.max_tokens);
+        return Err((StatusCode::BAD_REQUEST, "Max tokens cannot exceed 15".to_string()));
+    }
+    
+    // Format prompt for TinyLlama
+    let prompt = format!("Human: {}\nAssistant:", req.message);
+    println!("🔵 Using prompt: '{}'", prompt);
+    
+    // Generate response with timeout
+    println!("🔵 Starting generation...");
+    let start_time = std::time::Instant::now();
+    
+    let response = tokio::time::timeout(
+        Duration::from_secs(25), // 25 second timeout
+        model_service.generate(prompt, req.max_tokens)
+    ).await;
+    
+    let response = match response {
+        Ok(Ok(resp)) => {
+            println!("✅ Generation completed: '{}'", resp.text);
+            resp
+        },
+        Ok(Err(e)) => {
+            println!("❌ Generation failed: {}", e);
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Generation failed: {}", e)));
+        },
+        Err(_) => {
+            println!("❌ Generation timed out after 25 seconds");
+            return Err((StatusCode::REQUEST_TIMEOUT, "Request timed out".to_string()));
+        }
+    };
+    
+    let total_time = start_time.elapsed().as_millis();
+    println!("🔵 Total request time: {}ms", total_time);
+    
+    let tokens_per_second = if response.generation_time_ms > 0 {
+        response.tokens as f64 / (response.generation_time_ms as f64 / 1000.0)
+    } else {
+        0.0
+    };
+    
+    Ok(Json(ChatResponse {
+        reply: response.text,
+        tokens_generated: response.tokens,
+        generation_time_ms: response.generation_time_ms,
+        tokens_per_second,
+        cached: response.cached,
+    }))
+}
 
-    // 2) Run inference (blocking call)
-    // Replace with the correct inference method for your model
-    // Convert input_ids (Vec<u32>) to a Tensor
-    let device = model.device.clone(); // use model.device if available
-    let input_tensor = candle_core::Tensor::from_vec(input_ids.clone(), (input_ids.len(),), &device).unwrap();
-
-    // Provide the required second argument (e.g., None if optional)
-    let output = model
-        .model.clone()
-        .forward(&input_tensor, 0)
-        .unwrap();
-
-    // Assuming output is a vector of token ids
-    let output_ids = output.to_vec1::<u32>().unwrap();
-
-    // 3) Decode tokens back to text
-    let reply_text = model.tokenizer.decode(&output_ids, true).unwrap();
-
-    Json(ChatResponse { reply: reply_text })
+pub async fn health_handler(
+    State(model_service): State<Arc<ModelService>>,
+) -> Json<serde_json::Value> {
+    let stats = model_service.get_stats();
+    Json(serde_json::json!({
+        "status": "healthy",
+        "cache_size": stats.cache_size,
+        "available_permits": stats.available_permits,
+        "timestamp": chrono::Utc::now().to_rfc3339()
+    }))
 }
