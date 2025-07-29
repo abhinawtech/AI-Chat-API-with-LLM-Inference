@@ -1,0 +1,26 @@
+[package]
+name = "ai-llm"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = "0.8.4"
+tokio ={ version = "1.47.0", features = ["full"]}
+serde ={ version = "1.0.219", features = ["derive"]}
+serde_json = "1.0.141"
+tracing = "0.1.41" 
+tracing-subscriber = "0.3.19"
+tower-http = {version = "0.6.6", features = ["cors","trace"]}
+
+# Core tensor operations (matrix math, CPU/GPU support)
+candle-core          = "0.9.1"
+# Neural-network layers (linear, attention, etc.)
+candle-nn            = "0.9.1"
+# Prebuilt Transformer support (LLM architectures)
+candle-transformers  = "0.9.1"# Fetch model files from Hugging Face
+hf-hub               = "0.4.3"
+# Fast tokenization (text ↔ token IDs)
+tokenizers           = "0.21.4"
+# Simplified error handling
+anyhow               = "1.0"
+tokio-stream = "0.1.17"
