@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 use axum::{routing::{get, post}, Router};
 use routes::chat::{chat_handler, health_handler};
-use services::model_service::ModelService;
 use tokio::signal;
 use tracing_subscriber;
 use tower_http::{cors::{Any, CorsLayer}, trace::TraceLayer};
@@ -22,13 +21,6 @@ async fn main() {
         load_chat_model().expect("Failed to load chat model")
     );
 
-    // Create model service
-    let model_service = Arc::new(
-        ModelService::new(chat_model)
-            .await
-            .expect("Failed to create model service")
-    );
-
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
@@ -36,10 +28,10 @@ async fn main() {
 
     let app = Router::new()
         .route("/chat", post(chat_handler))
-        .route("/health", get(health_handler)) // Add health check
+        .route("/health", get(health_handler))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
-        .with_state(model_service);
+        .with_state(chat_model);
 
     let addr = "127.0.0.1:3000";
     println!("🚀 Listening on http://{}", addr);
